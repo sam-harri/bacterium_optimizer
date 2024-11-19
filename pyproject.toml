@@ -1,0 +1,14 @@
+[project]
+name = "bacterium-optimizer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "loguru>=0.7.2",
+    "mypy>=1.13.0",
+    "openpyxl>=3.1.5",
+    "polars>=1.14.0",
+    "ruff>=0.7.3",
+    "xlwings>=0.33.3",
+]
