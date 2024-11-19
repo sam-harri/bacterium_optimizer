@@ -1,54 +1,45 @@
-import xlwings as xw
+import time
+import xlwings as xw # type: ignore[import-untyped]
 import polars as pl
 import random
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple
+from loguru import logger
 
 
-# Function to generate a sample near the midpoint of a range
-def generate_midpoint_sample(range_: Tuple[float, float], deviation_percent: float = 0.1) -> float:
-    lower, upper = range_
-    midpoint = (lower + upper) / 2
-    delta = (upper - lower) * deviation_percent
-    return random.uniform(midpoint - delta, midpoint + delta)
+def sampling_function(range_: Tuple[float, float]) -> float:
+    upper, lower = range_
+    return random.uniform(upper, lower)
 
 
-# Function to run a single simulation
 def run_simulation(
     sheet: xw.Sheet,
-    params_ranges: Dict[str, Tuple[float, float]],
+    params_stats: Dict[str, Tuple[float, float]],
     params_locations: Dict[str, str],
     validation_params: Dict[str, str],
     results_params: Dict[str, str],
-) -> Dict[str, float]:
-    # Update input parameters in Excel
+) -> Dict[str, float | str]:
     input_values = {}
     for param, cell in params_locations.items():
-        value = generate_midpoint_sample(params_ranges[param])
-        sheet.range(cell).value = value
+        value = sampling_function(params_stats[param])
+        sheet[cell].value = value
         input_values[param] = value
 
-    # Wait for Excel to finish recalculating
-    while sheet.api.Application.CalculationState != 0:  # 0 means idle
+    IS_IDLE = 0
+    while sheet.api.Application.CalculationState != IS_IDLE:
         pass
 
-    # Check validation cells
     validation_results = {
         param: sheet.range(cell).value for param, cell in validation_params.items()
     }
     if not all(value == "VALID" for value in validation_results.values()):
         raise ValueError(f"Validation failed: {validation_results}")
 
-    # Collect results from output cells
-    results = {
-        param: sheet.range(cell).value for param, cell in results_params.items()
-    }
+    results : Dict[str, float | str]= {param: sheet.range(cell).value for param, cell in results_params.items()}
 
-    # Combine inputs and results into one dictionary
-    return {**input_values, **results}
+    return {**input_values, **validation_results, **results}
 
 
 if __name__ == "__main__":
-    # Parameters and configurations
     params_locations: Dict[str, str] = {
         "X0": "B12",
         "S0": "B13",
@@ -56,11 +47,11 @@ if __name__ == "__main__":
         "Vr": "B15",
     }
 
-    params_ranges: Dict[str, Tuple[float, float]] = {
-        "X0": (10, 90),
-        "S0": (100, 900),
-        "Pr0": (30, 310),
-        "Vr": (8000, 72000),
+    params_stats: Dict[str, Tuple[float, float]] = {
+        "X0": (45, 55),
+        "S0": (460, 490),
+        "Pr0": (150, 200),
+        "Vr": (35_000, 45_000),
     }
 
     validation_params: Dict[str, str] = {
@@ -70,6 +61,11 @@ if __name__ == "__main__":
     }
 
     results_params: Dict[str, str] = {
+        "operation_total_time": "B25",
+        "operation_avg_batch": "B26",
+        "operation_batch_time": "B27",
+        "operation_num_batches": "B28",
+        "operation_stationary_start": "B29",
         "OPEX_feed_X0": "AB4",
         "OEPX_feed_S0": "AB5",
         "OPEX_feed_Pr0": "AB6",
@@ -83,40 +79,42 @@ if __name__ == "__main__":
     }
 
     wb_name: str = "data/CHG4381-Group11-ReactorDesignandSimulation.xlsx"
-    wb = xw.Book(wb_name)
-    sheet = wb.sheets[0]  # Assuming the first sheet is active
+    wb : xw.Book = xw.Book(wb_name)
+    sheet : xw.Sheet = wb.sheets["Reactor"]
+    time.sleep(1)
 
-    # Initialize Polars DataFrame
-    results_df = pl.DataFrame()
+    results_df : pl.DataFrame = pl.DataFrame()
 
-    num_simulations = 1000
-    save_interval = 100
-    save_path = "data/simulation_results.csv"
+    num_simulations : int = 10_000
+    save_interval : int = 100
+    save_path :str = "data/simulation_results.csv"
 
     try:
         for i in range(1, num_simulations + 1):
-            # Run a single simulation
             try:
+                now = time.time()
                 simulation_data = run_simulation(
                     sheet,
-                    params_ranges,
+                    params_stats,
                     params_locations,
                     validation_params,
                     results_params,
                 )
-                # Append to Polars DataFrame
+                logger.info(
+                    f"SUCCESFULL  | Simulation {i} completed in {1000*(time.time() - now):.2f} miliseconds."
+                )
                 results_df = results_df.vstack(pl.DataFrame([simulation_data]))
-            except ValueError as e:
-                print(f"Simulation {i} failed: {e}")
-                continue
+            except ValueError:
+                logger.info(
+                    f"UNSUCCESFUL | Simulation {i} completed in {1000*(time.time() - now):.2f} miliseconds."
+                )
+            finally:
+                time.sleep(0.1)
+                if i % save_interval == 0:
+                    logger.info(f"SAVING | Saving simulation result checkpoint {i}...")
+                    results_df.write_csv(save_path)
 
-            # Save to file every `save_interval` simulations
-            if i % save_interval == 0:
-                print(f"Saving results at simulation {i}...")
-                results_df.write_csv(save_path)
-
-        # Final save
         results_df.write_csv(save_path)
-        print(f"Completed {num_simulations} simulations. Results saved to {save_path}.")
+        logger.info(f"COMPLETED | {num_simulations} simulations. Results saved to {save_path}.")
     finally:
         wb.close()
